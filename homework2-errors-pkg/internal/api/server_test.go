@@ -5,35 +5,85 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
-func TestItemHandler_NotFound(t *testing.T) {
-	server := New()
-	req := httptest.NewRequest(http.MethodGet, "/items/999", nil)
-	rec := httptest.NewRecorder()
+func decodeJSON[T any](t *testing.T, body *httptest.ResponseRecorder, dst *T) {
+	t.Helper()
+	require.NoError(t, json.NewDecoder(body.Body).Decode(dst))
+}
 
-	server.ServeHTTP(rec, req)
+func TestHandlers(t *testing.T) {
+	h := New()
 
-	res := rec.Result()
-	defer res.Body.Close()
+	t.Run("health", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/health", nil)
+		rr := httptest.NewRecorder()
 
-	if res.StatusCode != http.StatusNotFound {
-		t.Fatalf("ожидался статус 404, получен %d", res.StatusCode)
-	}
+		h.ServeHTTP(rr, req)
 
-	var body struct {
-		Code    int
-		Message string
-	}
-	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
-		t.Fatalf("ошибка декодирования ответа: %v", err)
-	}
+		require.Equal(t, http.StatusOK, rr.Code)
 
-	if body.Code != 1001 {
-		t.Fatalf("ожидался код 1001, получен %d", body.Code)
-	}
+		var resp map[string]string
+		decodeJSON(t, rr, &resp)
+		require.Equal(t, "ok", resp["status"])
+	})
 
-	if body.Message == "" {
-		t.Fatal("ожидалось не пустое сообщение")
-	}
+	t.Run("echo ok", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/echo?msg=ping", nil)
+		rr := httptest.NewRecorder()
+
+		h.ServeHTTP(rr, req)
+
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		var resp map[string]string
+		decodeJSON(t, rr, &resp)
+		require.Equal(t, "ping", resp["echo"])
+	})
+
+	t.Run("echo missing param", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/echo", nil)
+		rr := httptest.NewRecorder()
+
+		h.ServeHTTP(rr, req)
+
+		require.Equal(t, http.StatusBadRequest, rr.Code)
+
+		var resp map[string]string
+		decodeJSON(t, rr, &resp)
+		require.Contains(t, resp["error"], "msg")
+	})
+
+	t.Run("item ok", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/item/1", nil)
+		rr := httptest.NewRecorder()
+
+		h.ServeHTTP(rr, req)
+
+		require.Equal(t, http.StatusOK, rr.Code)
+
+		var itm Item
+		decodeJSON(t, rr, &itm)
+		require.Equal(t, Item{ID: 1, Name: "foo"}, itm)
+	})
+
+	t.Run("item bad id", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/item/abc", nil)
+		rr := httptest.NewRecorder()
+
+		h.ServeHTTP(rr, req)
+
+		require.Equal(t, http.StatusBadRequest, rr.Code)
+	})
+
+	t.Run("item not found", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/item/999", nil)
+		rr := httptest.NewRecorder()
+
+		h.ServeHTTP(rr, req)
+
+		require.Equal(t, http.StatusNotFound, rr.Code)
+	})
 }
